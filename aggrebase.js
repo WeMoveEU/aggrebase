@@ -40,9 +40,30 @@ function rowUpdateHandler(getQuery) {
   };
 }
 
+function mergeHandlers(currentVal, inVal, _k, _d, _s, stack) {
+  if (stack.size === 1) {
+    if (currentVal === undefined) {
+      return _.isArray(inVal) ? inVal : [inVal];
+    } else {
+      return _.flatten([currentVal, inVal]);
+    }
+  }
+}
+
+function processEvent(evt) {
+  if (evt.tableMap) {
+    var table = evt.tableMap[evt.tableId].tableName;
+    var evtName = evt.getEventName();
+    console.log("Processing " + evtName + " on " + table);
+    if (_.has(this.handlers, [table, evtName])) {
+      var analytics = this.analytics;
+      this.handlers[table][evtName].forEach((handler) => handler(analytics, evt));
+    }
+  }
+}
+
 function demap(obj) {
-  var k = _.keys(obj)[0];
-  return [k, obj[k]];
+  return _.entries(obj)[0];
 }
 
 function columnChanged(before, after) {
@@ -181,7 +202,7 @@ Aggrebase.prototype.add = function(viewConfig) {
     this.initQueries.push(viewConfig.initQuery);
   }
   if (viewConfig.handlers) {
-    _.merge(this.handlers, viewConfig.handlers);
+    this.handlers = _.mergeWith(this.handlers, viewConfig.handlers, mergeHandlers);
   }
 }
 
@@ -241,17 +262,8 @@ Aggrebase.prototype.start = function(options) {
     this.analytics.connect();
   }
 
-  var self = this;
   this.zongji = new ZongJi(this.config.srcConnection);
-  this.zongji.on('binlog', function(evt) {
-    if (evt.tableMap) {
-      var table = evt.tableMap[evt.tableId].tableName;
-      var evtName = evt.getEventName();
-      if (table in self.handlers && evtName in self.handlers[table]) {
-        self.handlers[table][evtName](self.analytics, evt);
-      }
-    }
-  });
+  this.zongji.on('binlog', _.bind(processEvent, this));
   this.zongji.start(startOptions);
 }
 
