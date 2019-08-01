@@ -54,7 +54,7 @@ function processEvent(evt) {
   if (evt.tableMap) {
     var table = evt.tableMap[evt.tableId].tableName;
     var evtName = evt.getEventName();
-    console.log("Processing " + evtName + " on " + table);
+    // console.log("Processing " + evtName + " on " + table);
     if (_.has(this.handlers, [table, evtName])) {
       var analytics = this.analytics;
       this.handlers[table][evtName].forEach((handler) => handler(analytics, evt));
@@ -62,6 +62,7 @@ function processEvent(evt) {
   }
 }
 
+// TODO replace with object destructuration
 function demap(obj) {
   return _.entries(obj)[0];
 }
@@ -77,10 +78,11 @@ function columnChanged(before, after) {
   };
 }
 
+// TODO implement keyMap
 function view(tableMap, key, valueColumns) {
   var [viewName, sourceTable] = demap(tableMap);
   var columnNames = _.concat([key], valueColumns);
-  return { handlers: { [sourceTable]: {
+  return { [sourceTable]: {
     writerows: rowHandler(function (row) {
       var values = _.at(row, columnNames);
       return {
@@ -103,13 +105,13 @@ function view(tableMap, key, valueColumns) {
         params: [viewName, key, row[key]]
       };
     })
-  }}};
+  }};
 }
 
 function joinedView(tableMap, keyMap, valueColumns, options = {}) {
   var [viewName, sourceTable] = demap(tableMap);
   var [viewKey, joinKey] = demap(keyMap);
-  return { handlers: { [sourceTable]: {
+  return { [sourceTable]: {
     writerows: rowHandler(function (row) {
       if (!options.filter || options.filter(row)) {
         return {
@@ -139,13 +141,13 @@ function joinedView(tableMap, keyMap, valueColumns, options = {}) {
         };
       }
     })
-  }}};
+  }};
 }
 
 function computedView(tableMap, keyMap, compute) {
   var [viewName, sourceTable] = demap(tableMap);
   var [viewKey, joinKey] = keyMap instanceof Object ? demap(keyMap) : [keyMap, keyMap];
-  return { handlers: { [sourceTable]: {
+  return { [sourceTable]: {
     writerows: rowHandler(function (row) {
       var viewRow = compute(undefined, row);
       if (viewRow) {
@@ -186,23 +188,37 @@ function computedView(tableMap, keyMap, compute) {
         };
       }
     })
-  }}};
+  }};
 }
 
 function Aggrebase(config) {
   this.config = config;
+  // TODO rename this property (destination?)
   this.analytics = mysql.createConnection(config.destConnection);
 
   this.initQueries = [];
   this.handlers = {};
 }
 
+// TODO read database name
 Aggrebase.prototype.add = function(viewConfig) {
-  if (viewConfig.initQuery) {
-    this.initQueries.push(viewConfig.initQuery);
+  if (viewConfig.initQueries) {
+    this.initQueries = _.concat(this.initQueries, viewConfig.initQueries);
   }
-  if (viewConfig.handlers) {
-    this.handlers = _.mergeWith(this.handlers, viewConfig.handlers, mergeHandlers);
+  for (var source of viewConfig.sources) {
+    var tableMap = {[viewConfig.name]: source.table_name};
+    if (typeof viewConfig.columns === 'function') {
+      var keyMap = source.foreignKey ? {[viewConfig.key]: source.foreignKey} : viewConfig.key;
+      var sourceHandlers = computedView(tableMap, keyMap, source.columns);
+    }
+    else if (!source.foreignKey) {
+      var sourceHandlers = view(tableMap, viewConfig.key, source.columns);
+    }
+    else {
+      var keyMap = {[viewConfig.key]: source.foreignKey};
+      var sourceHandlers = joinedView(tableMap, keyMap, source.columns, source.filter);
+    }
+    this.handlers = _.mergeWith(this.handlers, sourceHandlers, mergeHandlers);
   }
 }
 
@@ -227,12 +243,12 @@ Aggrebase.prototype.init = function() {
         binlogNextPos: results[0].Position
       }};
       _.map(_.initial(self.initQueries), function (q) {
-        console.log("Executing: " + q);
+        console.info("Executing: " + q);
         self.analytics.query(q, checkError);
       });
 
       var lastQ = _.last(self.initQueries);
-      console.log("Executing: " + lastQ);
+      console.info("Executing: " + lastQ);
       self.analytics.query(lastQ, function (error) {
         checkError(error);
         self.analytics.commit(function (err) {
