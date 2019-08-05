@@ -61,7 +61,6 @@ function processEvent(evt) {
   }
 }
 
-// TODO replace with object destructuration
 function demap(obj) {
   return _.entries(obj)[0];
 }
@@ -77,16 +76,15 @@ function columnChanged(before, after) {
   };
 }
 
-// TODO implement keyMap
-function view(tableMap, key, valueColumns) {
-  var [viewName, sourceTable] = demap(tableMap);
-  var columnNames = _.concat([key], valueColumns);
+function viewHandlers(sourceTable, sourceKey, viewName, viewKey, valueColumns) {
+  var srcColumns = [sourceKey, ...valueColumns];
+  var destColumns = [viewKey, ...valueColumns];
   return { [sourceTable]: {
     writerows: rowHandler(function (row) {
-      var values = _.at(row, columnNames);
+      var values = _.at(row, srcColumns);
       return {
         query: "INSERT INTO ?? (??) VALUES (?)",
-        params: [viewName, columnNames, values]
+        params: [viewName, destColumns, values]
       };
     }),
     updaterows: rowUpdateHandler(function (before, after) {
@@ -94,22 +92,20 @@ function view(tableMap, key, valueColumns) {
       if (!_.isEmpty(changedColumns)) {
         return {
           query: "UPDATE ?? SET ? WHERE ??=?",
-          params: [viewName, _.pick(after, changedColumns), key, before[key]]
+          params: [viewName, _.pick(after, changedColumns), viewKey, before[sourceKey]]
         };
       }
     }),
     deleterows: rowHandler(function (row) {
       return {
         query: "DELETE FROM ?? WHERE ??=?",
-        params: [viewName, key, row[key]]
+        params: [viewName, viewKey, row[sourceKey]]
       };
     })
   }};
 }
 
-function joinedView(tableMap, keyMap, valueColumns, options = {}) {
-  var [viewName, sourceTable] = demap(tableMap);
-  var [viewKey, joinKey] = demap(keyMap);
+function joinedViewHandlers(sourceTable, joinKey, viewName, viewKey, valueColumns, options = {}) {
   return { [sourceTable]: {
     writerows: rowHandler(function (row) {
       if (!options.filter || options.filter(row)) {
@@ -143,9 +139,7 @@ function joinedView(tableMap, keyMap, valueColumns, options = {}) {
   }};
 }
 
-function computedView(tableMap, keyMap, compute) {
-  var [viewName, sourceTable] = demap(tableMap);
-  var [viewKey, joinKey] = keyMap instanceof Object ? demap(keyMap) : [keyMap, keyMap];
+function computedViewHandlers(sourceTable, joinKey, viewName, viewKey, compute) {
   return { [sourceTable]: {
     writerows: rowHandler(function (row) {
       var viewRow = compute(undefined, row);
@@ -199,24 +193,23 @@ function Aggrebase(config) {
 }
 
 // TODO read database name
+// TODO consistent property case
 Aggrebase.prototype.add = function(viewConfig) {
   if (viewConfig.initQueries) {
     this.initQueries = _.concat(this.initQueries, viewConfig.initQueries);
   }
   for (var source of viewConfig.sources) {
-    var tableMap = {[viewConfig.name]: source.table_name};
     if (typeof viewConfig.columns === 'function') {
-      var keyMap = source.foreignKey ? {[viewConfig.key]: source.foreignKey} : viewConfig.key;
-      var sourceHandlers = computedView(tableMap, keyMap, source.columns);
+      var joinKey = source.foreignKey ? source.foreignKey : viewConfig.key;
+      var eventHandlers = computedViewHandlers(source.table_name, joinKey, viewConfig.name, viewConfig.key, source.columns);
     }
     else if (!source.foreignKey) {
-      var sourceHandlers = view(tableMap, viewConfig.key, source.columns);
+      var eventHandlers = viewHandlers(source.table_name, viewConfig.key, viewConfig.name, viewConfig.key, source.columns);
     }
     else {
-      var keyMap = {[viewConfig.key]: source.foreignKey};
-      var sourceHandlers = joinedView(tableMap, keyMap, source.columns, source.filter);
+      var eventHandlers = joinedViewHandlers(source.table_name, source.foreignKey, viewConfig.name, viewConfig.key, source.columns, source.filter);
     }
-    this.handlers = _.mergeWith(this.handlers, sourceHandlers, mergeHandlers);
+    this.handlers = _.mergeWith(this.handlers, eventHandlers, mergeHandlers);
   }
 }
 
@@ -285,9 +278,5 @@ Aggrebase.prototype.stop = function() {
   this.zongji.stop();
   this.destConnection.end();
 }
-
-Aggrebase.view = view;
-Aggrebase.joinedView = joinedView;
-Aggrebase.computedView = computedView;
 
 module.exports = Aggrebase;
