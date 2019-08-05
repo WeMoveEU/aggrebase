@@ -2,7 +2,7 @@ var _ = require('lodash');
 var mysql = require('mysql');
 var ZongJi = require('zongji');
 
-function updateAnalytics(dbConnection, query, params) {
+function updateDestination(dbConnection, query, params) {
   dbConnection.query(query, params, function(error, results, fields) {
     if (error) {
       if (error.sqlMessage) {
@@ -18,11 +18,11 @@ function updateAnalytics(dbConnection, query, params) {
 }
 
 function rowHandler(getQuery) {
-  return function (analytics, evt) {
+  return function (destConnection, evt) {
     for (var row of evt.rows) {
       var q = getQuery(row);
       if (q) {
-        updateAnalytics(analytics, q.query, q.params);
+        updateDestination(destConnection, q.query, q.params);
       }
     }
   };
@@ -30,11 +30,11 @@ function rowHandler(getQuery) {
 
 //TODO This is almost identical as rowHandler
 function rowUpdateHandler(getQuery) {
-  return function (analytics, evt) {
+  return function (destConnection, evt) {
     for (var update of evt.rows) {
       var q = getQuery(update.before, update.after);
       if (q) {
-        updateAnalytics(analytics, q.query, q.params);
+        updateDestination(destConnection, q.query, q.params);
       }
     }
   };
@@ -56,8 +56,7 @@ function processEvent(evt) {
     var evtName = evt.getEventName();
     // console.log("Processing " + evtName + " on " + table);
     if (_.has(this.handlers, [table, evtName])) {
-      var analytics = this.analytics;
-      this.handlers[table][evtName].forEach((handler) => handler(analytics, evt));
+      this.handlers[table][evtName].forEach((handler) => handler(this.destConnection, evt));
     }
   }
 }
@@ -193,8 +192,7 @@ function computedView(tableMap, keyMap, compute) {
 
 function Aggrebase(config) {
   this.config = config;
-  // TODO rename this property (destination?)
-  this.analytics = mysql.createConnection(config.destConnection);
+  this.destConnection = mysql.createConnection(config.destConnection);
 
   this.initQueries = [];
   this.handlers = {};
@@ -224,18 +222,18 @@ Aggrebase.prototype.add = function(viewConfig) {
 
 Aggrebase.prototype.init = function() {
   var self = this;
-  self.analytics.connect();
-  self.analytics.beginTransaction(function(error) {
+  self.destConnection.connect();
+  self.destConnection.beginTransaction(function(error) {
     if (error) { throw error; }
     function checkError(error) {
       if (error) {
-        return self.analytics.rollback(function() {
+        return self.destConnection.rollback(function() {
           throw error;
         });
       }
     }
 
-    self.analytics.query("SHOW MASTER STATUS", function (error, results) {
+    self.destConnection.query("SHOW MASTER STATUS", function (error, results) {
       checkError(error);
 
       var startOptions = { from: {
@@ -244,14 +242,14 @@ Aggrebase.prototype.init = function() {
       }};
       _.map(_.initial(self.initQueries), function (q) {
         console.info("Executing: " + q);
-        self.analytics.query(q, checkError);
+        self.destConnection.query(q, checkError);
       });
 
       var lastQ = _.last(self.initQueries);
       console.info("Executing: " + lastQ);
-      self.analytics.query(lastQ, function (error) {
+      self.destConnection.query(lastQ, function (error) {
         checkError(error);
-        self.analytics.commit(function (err) {
+        self.destConnection.commit(function (err) {
           checkError(err);
           self.start(startOptions);
         });
@@ -274,8 +272,8 @@ Aggrebase.prototype.start = function(options) {
     console.info("Starting from latest position");
   }
   
-  if (!this.analytics._connectCalled) {
-    this.analytics.connect();
+  if (!this.destConnection._connectCalled) {
+    this.destConnection.connect();
   }
 
   this.zongji = new ZongJi(this.config.srcConnection);
@@ -285,7 +283,7 @@ Aggrebase.prototype.start = function(options) {
 
 Aggrebase.prototype.stop = function() {
   this.zongji.stop();
-  this.analytics.end();
+  this.destConnection.end();
 }
 
 Aggrebase.view = view;
