@@ -41,7 +41,7 @@ function rowUpdateHandler(getQuery) {
 }
 
 function mergeHandlers(currentVal, inVal, _k, _d, _s, stack) {
-  if (stack.size === 1) {
+  if (stack.size === 2) {
     if (currentVal === undefined) {
       return _.isArray(inVal) ? inVal : [inVal];
     } else {
@@ -52,11 +52,12 @@ function mergeHandlers(currentVal, inVal, _k, _d, _s, stack) {
 
 function processEvent(evt) {
   if (evt.tableMap) {
+    var db = evt.tableMap[evt.tableId].parentSchema;
     var table = evt.tableMap[evt.tableId].tableName;
     var evtName = evt.getEventName();
-    // console.log("Processing " + evtName + " on " + table);
-    if (_.has(this.handlers, [table, evtName])) {
-      this.handlers[table][evtName].forEach((handler) => handler(this.destConnection, evt));
+    // console.debug("Processing " + evtName + " on " + db + "." + table);
+    if (_.has(this.handlers, [db, table, evtName])) {
+      this.handlers[db][table][evtName].forEach((handler) => handler(this.destConnection, evt));
     }
   }
 }
@@ -76,10 +77,10 @@ function columnChanged(before, after) {
   };
 }
 
-function viewHandlers(sourceTable, sourceKey, viewName, viewKey, valueColumns) {
+function viewHandlers(sourceDb, sourceTable, sourceKey, viewName, viewKey, valueColumns) {
   var srcColumns = [sourceKey, ...valueColumns];
   var destColumns = [viewKey, ...valueColumns];
-  return { [sourceTable]: {
+  return { [sourceDb]: { [sourceTable]: {
     writerows: rowHandler(function (row) {
       var values = _.at(row, srcColumns);
       return {
@@ -102,11 +103,11 @@ function viewHandlers(sourceTable, sourceKey, viewName, viewKey, valueColumns) {
         params: [viewName, viewKey, row[sourceKey]]
       };
     })
-  }};
+  }}};
 }
 
-function joinedViewHandlers(sourceTable, joinKey, viewName, viewKey, valueColumns, options = {}) {
-  return { [sourceTable]: {
+function joinedViewHandlers(sourceDb, sourceTable, joinKey, viewName, viewKey, valueColumns, options = {}) {
+  return { [sourceDb]: { [sourceTable]: {
     writerows: rowHandler(function (row) {
       if (!options.filter || options.filter(row)) {
         return {
@@ -136,11 +137,11 @@ function joinedViewHandlers(sourceTable, joinKey, viewName, viewKey, valueColumn
         };
       }
     })
-  }};
+  }}};
 }
 
-function computedViewHandlers(sourceTable, joinKey, viewName, viewKey, compute) {
-  return { [sourceTable]: {
+function computedViewHandlers(sourceDb, sourceTable, joinKey, viewName, viewKey, compute) {
+  return { [sourceDb]: { [sourceTable]: {
     writerows: rowHandler(function (row) {
       var viewRow = compute(undefined, row);
       if (viewRow) {
@@ -181,7 +182,7 @@ function computedViewHandlers(sourceTable, joinKey, viewName, viewKey, compute) 
         };
       }
     })
-  }};
+  }}};
 }
 
 function Aggrebase(config) {
@@ -192,22 +193,20 @@ function Aggrebase(config) {
   this.handlers = {};
 }
 
-// TODO read database name
-// TODO consistent property case
 Aggrebase.prototype.add = function(viewConfig) {
-  if (viewConfig.initQueries) {
-    this.initQueries = _.concat(this.initQueries, viewConfig.initQueries);
+  if (viewConfig.init_queries) {
+    this.initQueries = _.concat(this.initQueries, viewConfig.init_queries);
   }
   for (var source of viewConfig.sources) {
     if (typeof viewConfig.columns === 'function') {
-      var joinKey = source.foreignKey ? source.foreignKey : viewConfig.key;
-      var eventHandlers = computedViewHandlers(source.table_name, joinKey, viewConfig.name, viewConfig.key, source.columns);
+      var joinKey = source.foreign_key ? source.foreign_key : viewConfig.key;
+      var eventHandlers = computedViewHandlers(source.database, source.table_name, joinKey, viewConfig.name, viewConfig.key, source.columns);
     }
-    else if (!source.foreignKey) {
-      var eventHandlers = viewHandlers(source.table_name, viewConfig.key, viewConfig.name, viewConfig.key, source.columns);
+    else if (!source.foreign_key) {
+      var eventHandlers = viewHandlers(source.database, source.table_name, viewConfig.key, viewConfig.name, viewConfig.key, source.columns);
     }
     else {
-      var eventHandlers = joinedViewHandlers(source.table_name, source.foreignKey, viewConfig.name, viewConfig.key, source.columns, source.filter);
+      var eventHandlers = joinedViewHandlers(source.database, source.table_name, source.foreign_key, viewConfig.name, viewConfig.key, source.columns, source.filter);
     }
     this.handlers = _.mergeWith(this.handlers, eventHandlers, mergeHandlers);
   }
