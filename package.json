@@ -3,7 +3,7 @@
   "description": "MySQL replication listener for online analytics",
   "version": "0.0.1",
   "dependencies": {
-    "lodash": "^4.17.13",
+    "lodash": "^4.17.19",
     "zongji": "^0.4.6"
   }
 }
